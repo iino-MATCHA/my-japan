@@ -9,7 +9,7 @@ import { ALL_PREFECTURES, getPrefectureById } from '../data/prefectureData';
 import { PrefectureTravelData } from '../types';
 import { Info, X, Share, Instagram, Download, MoreHorizontal } from 'lucide-react';
 import { motion, AnimatePresence, useMotionValue, useTransform, animate } from 'motion/react';
-import { toBlob } from 'html-to-image';
+import { toBlob, toPng } from 'html-to-image';
 
 interface JapanMapProps {
   onSelectPrefecture: (id: string) => void;
@@ -298,6 +298,61 @@ export default function JapanMap({ onSelectPrefecture }: JapanMapProps) {
   const clickStartCoord = useRef({ x: 0, y: 0 });
   const draggedAmountRef = useRef(0);
 
+  // Reliably rasterize the share card to a PNG Blob. html-to-image can fail on the
+  // first pass (common on Safari) or when embedding cross-origin web fonts, and can
+  // occasionally hang — so we retry with a warm-up pass, then skip font embedding,
+  // and finally fall back to toPng, each guarded by a timeout.
+  const generateShareBlob = async (): Promise<Blob> => {
+    const node = shareCardRef.current as HTMLElement;
+
+    // Best-effort: wait for web fonts so layout/embedding is stable.
+    try { await (document as any).fonts?.ready; } catch (e) { /* ignore */ }
+
+    const baseOptions = {
+      cacheBust: true,
+      backgroundColor: '#FFFFFF',
+      pixelRatio: 2,
+      style: { transform: 'none', borderRadius: '0px' },
+    };
+
+    const withTimeout = <T,>(p: Promise<T>, ms: number): Promise<T> =>
+      Promise.race([
+        p,
+        new Promise<T>((_, reject) => setTimeout(() => reject(new Error('timeout')), ms)),
+      ]);
+
+    let lastError: unknown;
+
+    // 1) full font embedding (best fidelity, short budget) -> 2) skip fonts (reliable
+    // and fast; also serves as the warm-up retry browsers like Safari sometimes need).
+    const blobAttempts: { options: Parameters<typeof toBlob>[1]; ms: number }[] = [
+      { options: baseOptions, ms: 5000 },
+      { options: { ...baseOptions, skipFonts: true }, ms: 8000 },
+    ];
+    for (const { options, ms } of blobAttempts) {
+      try {
+        const blob = await withTimeout(toBlob(node, options), ms);
+        if (blob) return blob;
+        lastError = new Error('Empty blob');
+      } catch (e) {
+        lastError = e;
+      }
+    }
+
+    // 4) Last resort: PNG data URL -> Blob (a different canvas path that succeeds on
+    // some browsers where toBlob does not).
+    try {
+      const dataUrl = await withTimeout(toPng(node, { ...baseOptions, skipFonts: true }), 9000);
+      const res = await fetch(dataUrl);
+      const blob = await res.blob();
+      if (blob && blob.size > 0) return blob;
+    } catch (e) {
+      lastError = e;
+    }
+
+    throw lastError ?? new Error('Image generation failed');
+  };
+
   const handleActionClick = async (actionType: 'instagram' | 'facebook' | 'x' | 'download' | 'other') => {
     if (!shareCardRef.current) {
       setToastMessage("Error: Card element not found!");
@@ -306,21 +361,8 @@ export default function JapanMap({ onSelectPrefecture }: JapanMapProps) {
 
     try {
       setToastMessage("Generating premium status card... ⏳");
-      
-      // html-to-image toBlob creates a fully styled high DPI blob of `#share-card-graphic`
-      const blob = await toBlob(shareCardRef.current, {
-        cacheBust: false,
-        backgroundColor: '#FFFFFF', // simple clean white background
-        style: {
-          transform: 'none',
-          borderRadius: '0px', // square corners
-        },
-        pixelRatio: 2.0, // Crisp high-DPI standard for mobile/retina displays and Instagram Stories (optimized for speed)
-      });
 
-      if (!blob) {
-        throw new Error("Blob creation failed");
-      }
+      const blob = await generateShareBlob();
 
       const file = new File([blob], 'master_of_japan_status.png', { type: 'image/png' });
 
@@ -1029,7 +1071,7 @@ export default function JapanMap({ onSelectPrefecture }: JapanMapProps) {
                                         key={`share-${pref.id}-${idx}`}
                                         d={subPath}
                                         transform={transformStr}
-                                        style={{ fill: fillVal, stroke: strokeVal, strokeWidth: `${strokeW}px` }}
+                                        style={{ fill: fillVal, stroke: strokeVal, strokeWidth: `${(parseFloat(strokeW) / 3).toFixed(2)}px` }}
                                       />
                                     );
                                   })}
