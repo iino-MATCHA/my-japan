@@ -246,8 +246,10 @@ export default function JapanMap({ onSelectPrefecture }: JapanMapProps) {
   // immediately inside the user gesture (Chrome requires transient activation).
   const cardBlobRef = useRef<Blob | null>(null);
 
-  const longPressTimerRef = useRef<NodeJS.Timeout | null>(null);
-  const isLongPressActiveRef = useRef(false);
+  // Double-tap detection: a single tap toggles "visited", a quick second tap on the
+  // same prefecture toggles the bucket list instead.
+  const pendingTapRef = useRef<{ id: string; timer: NodeJS.Timeout } | null>(null);
+  const DOUBLE_TAP_MS = 260;
 
   // One-shot tap effect: traces the prefecture outline, then emits a ripple.
   // `key` is refreshed on every tap so the animation re-plays even on the same prefecture.
@@ -264,35 +266,14 @@ export default function JapanMap({ onSelectPrefecture }: JapanMapProps) {
 
   useEffect(() => {
     return () => {
-      if (longPressTimerRef.current) {
-        clearTimeout(longPressTimerRef.current);
+      if (pendingTapRef.current) {
+        clearTimeout(pendingTapRef.current.timer);
       }
       if (tapFxTimerRef.current) {
         clearTimeout(tapFxTimerRef.current);
       }
     };
   }, []);
-
-  const startLongPressTimer = (prefId: string) => {
-    isLongPressActiveRef.current = false;
-    if (longPressTimerRef.current) {
-      clearTimeout(longPressTimerRef.current);
-    }
-    longPressTimerRef.current = setTimeout(() => {
-      isLongPressActiveRef.current = true;
-      setBucketList((prev) => ({
-        ...prev,
-        [prefId]: !prev[prefId]
-      }));
-    }, 600);
-  };
-
-  const cancelLongPressTimer = () => {
-    if (longPressTimerRef.current) {
-      clearTimeout(longPressTimerRef.current);
-      longPressTimerRef.current = null;
-    }
-  };
 
   const [scale, setScale] = useState(1.15);
   const [pan, setPan] = useState({ x: 30, y: 0 });
@@ -459,10 +440,6 @@ export default function JapanMap({ onSelectPrefecture }: JapanMapProps) {
     const deltaY = e.clientY - clickStartCoord.current.y;
     draggedAmountRef.current = Math.sqrt(deltaX * deltaX + deltaY * deltaY);
 
-    if (draggedAmountRef.current > 5) {
-      cancelLongPressTimer();
-    }
-
     // Apply 0.20 resistance multiplier so dragging feels heavy, stable and precise (less slippery)
     const resistance = 0.20;
     setPan({
@@ -473,7 +450,6 @@ export default function JapanMap({ onSelectPrefecture }: JapanMapProps) {
 
   const handleMouseUpOrLeave = () => {
     setIsDragging(false);
-    cancelLongPressTimer();
   };
 
   const handleTouchStart = (e: React.TouchEvent) => {
@@ -494,10 +470,6 @@ export default function JapanMap({ onSelectPrefecture }: JapanMapProps) {
       const deltaY = touch.clientY - clickStartCoord.current.y;
       draggedAmountRef.current = Math.sqrt(deltaX * deltaX + deltaY * deltaY);
 
-      if (draggedAmountRef.current > 5) {
-        cancelLongPressTimer();
-      }
-
       // Apply 0.20 resistance multiplier so touch-drag/panning feels heavy, stable, and less slippery
       const resistance = 0.20;
       setPan({
@@ -509,32 +481,57 @@ export default function JapanMap({ onSelectPrefecture }: JapanMapProps) {
 
   const handleTouchEnd = () => {
     setIsDragging(false);
-    cancelLongPressTimer();
   };
 
-  // Toggle visited status and trigger parent selection on tap
-  const handlePrefectureClick = (prefId: string) => {
-    cancelLongPressTimer();
-    if (isLongPressActiveRef.current) {
-      isLongPressActiveRef.current = false;
-      return;
-    }
-    if (draggedAmountRef.current > 5) {
-      // It was a drag/pan action, don't trigger selection
-      return;
-    }
+  // Single tap toggles "visited" (with the outline+ripple flourish); a quick second
+  // tap on the same prefecture toggles the bucket list instead.
+  const applyVisitedTap = (prefId: string) => {
     const willVisit = !visited[prefId];
     setVisited((prev) => ({
       ...prev,
       [prefId]: !prev[prefId],
     }));
-    // Play the outline-draw + ripple flourish only when newly marking as visited.
     if (willVisit) {
       triggerTapFx(prefId);
     } else {
       setTapFx(null);
     }
     onSelectPrefecture(prefId);
+  };
+
+  const handlePrefectureClick = (prefId: string) => {
+    if (draggedAmountRef.current > 5) {
+      // It was a drag/pan action, don't trigger selection
+      return;
+    }
+
+    const pending = pendingTapRef.current;
+
+    // Second tap on the same prefecture within the window -> bucket list toggle.
+    if (pending && pending.id === prefId) {
+      clearTimeout(pending.timer);
+      pendingTapRef.current = null;
+      setTapFx(null);
+      setBucketList((prev) => ({
+        ...prev,
+        [prefId]: !prev[prefId],
+      }));
+      return;
+    }
+
+    // A tap on a different prefecture while one is pending -> resolve that one now.
+    if (pending) {
+      clearTimeout(pending.timer);
+      pendingTapRef.current = null;
+      applyVisitedTap(pending.id);
+    }
+
+    // Defer the visited toggle briefly so a follow-up tap can be caught as a double-tap.
+    const timer = setTimeout(() => {
+      pendingTapRef.current = null;
+      applyVisitedTap(prefId);
+    }, DOUBLE_TAP_MS);
+    pendingTapRef.current = { id: prefId, timer };
   };
 
 
@@ -676,18 +673,6 @@ export default function JapanMap({ onSelectPrefecture }: JapanMapProps) {
                   ? 'fill 0.35s ease-out 0.55s, stroke 0.35s ease-out 0.55s, stroke-width 0.35s ease-out 0.55s'
                   : undefined;
 
-                // Interactive Mouse & Touch events for long-press trigger on path
-                const handleMouseDownPath = (e: React.MouseEvent) => {
-                  if (e.button !== 0) return; // Left click only
-                  startLongPressTimer(pref.id);
-                };
-                const handleTouchStartPath = (e: React.TouchEvent) => {
-                  startLongPressTimer(pref.id);
-                };
-                const handleMouseUpOrLeavePath = () => {
-                  cancelLongPressTimer();
-                };
-
                 const isOkinawa = pref.id === 'okinawa';
 
                 if (isOkinawa) {
@@ -703,10 +688,6 @@ export default function JapanMap({ onSelectPrefecture }: JapanMapProps) {
                         style={{ pointerEvents: 'all' }}
                         className="cursor-pointer"
                         onClick={() => handlePrefectureClick(pref.id)}
-                        onMouseDown={handleMouseDownPath}
-                        onTouchStart={handleTouchStartPath}
-                        onMouseUp={handleMouseUpOrLeavePath}
-                        onTouchEnd={handleMouseUpOrLeavePath}
                       />
                       {subPaths.map((subPath, idx) => {
                         let centerX = 575;
@@ -744,14 +725,7 @@ export default function JapanMap({ onSelectPrefecture }: JapanMapProps) {
                             style={{ fill: fillVal, stroke: strokeVal, strokeWidth: `${(parseFloat(strokeW) / 3).toFixed(2)}px`, transition: tapFillTransition }}
                             className="transition-all duration-200 cursor-pointer stroke-linejoin-round"
                             onClick={() => handlePrefectureClick(pref.id)}
-                            onMouseDown={handleMouseDownPath}
-                            onTouchStart={handleTouchStartPath}
-                            onMouseUp={handleMouseUpOrLeavePath}
-                            onMouseLeave={() => {
-                              setHoveredPref(null);
-                              handleMouseUpOrLeavePath();
-                            }}
-                            onTouchEnd={handleMouseUpOrLeavePath}
+                            onMouseLeave={() => setHoveredPref(null)}
                           />
                         );
                       })}
@@ -767,14 +741,7 @@ export default function JapanMap({ onSelectPrefecture }: JapanMapProps) {
                     style={{ fill: fillVal, stroke: strokeVal, strokeWidth: `${strokeW}px`, transition: tapFillTransition }}
                     className="transition-all duration-200 cursor-pointer stroke-linejoin-round"
                     onClick={() => handlePrefectureClick(pref.id)}
-                    onMouseDown={handleMouseDownPath}
-                    onTouchStart={handleTouchStartPath}
-                    onMouseUp={handleMouseUpOrLeavePath}
-                    onMouseLeave={() => {
-                      setHoveredPref(null);
-                      handleMouseUpOrLeavePath();
-                    }}
-                    onTouchEnd={handleMouseUpOrLeavePath}
+                    onMouseLeave={() => setHoveredPref(null)}
                   />
                 );
               })}
