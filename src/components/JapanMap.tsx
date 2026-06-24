@@ -8,7 +8,7 @@ import { PREFECTURE_PATHS } from '../data/mappath';
 import { ALL_PREFECTURES, getPrefectureById } from '../data/prefectureData';
 import { PrefectureTravelData } from '../types';
 import { Info, X, Share, Instagram, Download, MoreHorizontal } from 'lucide-react';
-import { motion, AnimatePresence } from 'motion/react';
+import { motion, AnimatePresence, useMotionValue, useTransform, animate } from 'motion/react';
 import { toBlob } from 'html-to-image';
 
 interface JapanMapProps {
@@ -160,13 +160,42 @@ function getPrefLabelPos(prefId: string, pathD: string): { x: number; y: number 
   return { x: cx, y: cy };
 }
 
+// Returns the renderable path segments (with any SVG transform) for a prefecture,
+// mirroring how the base map draws them. Used by the tap "outline draw" overlay so
+// the traced border lines up exactly, including Okinawa's relocated/scaled islands.
+function getPrefSegments(prefId: string, pathD: string): { d: string; transform?: string }[] {
+  if (prefId !== 'okinawa') return [{ d: pathD }];
+
+  const subPaths = pathD.split('Z').map((p) => p.trim()).filter(Boolean).map((p) => p + ' Z');
+  return subPaths.map((subPath, idx) => {
+    let centerX = 575;
+    let centerY = 575;
+    let localTranslate = '';
+    if (idx === 1) {
+      centerX = 505;
+      centerY = 607;
+      localTranslate = 'translate(24, -20)';
+    } else if (idx === 2) {
+      centerX = 497;
+      centerY = 609;
+      localTranslate = 'translate(38, -26)';
+    }
+    const globalTranslate = 'translate(16, 72)';
+    const transform = `${globalTranslate} ${localTranslate} translate(${centerX}, ${centerY}) scale(3) translate(${-centerX}, -${centerY})`;
+    return { d: subPath, transform };
+  });
+}
+
 export default function JapanMap({ onSelectPrefecture }: JapanMapProps) {
-  // Mock default visited states as requested by the user:
-  // 東京 (tokyo), かながわ (kanagawa), 埼玉 (saitama), 千葉 (chiba), 北海道 (hokkaido), 香川 (kagawa), 大阪 (osaka), 京都 (kyoto)
-  const MOCK_VISITED = ['tokyo', 'kanagawa', 'saitama', 'chiba', 'hokkaido', 'kagawa', 'osaka', 'kyoto'];
+  // Mock default visited states (≈19% of 47 prefectures):
+  // 東京 (tokyo), 神奈川 (kanagawa), 埼玉 (saitama), 千葉 (chiba), 北海道 (hokkaido), 香川 (kagawa), 大阪 (osaka), 京都 (kyoto), 愛知 (aichi)
+  const MOCK_VISITED = ['tokyo', 'kanagawa', 'saitama', 'chiba', 'hokkaido', 'kagawa', 'osaka', 'kyoto', 'aichi'];
+
+  // Mock default bucket list / 行きたいリスト: 沖縄 (okinawa), 奈良 (nara), 広島 (hiroshima), 長野 (nagano)
+  const MOCK_BUCKET = ['okinawa', 'nara', 'hiroshima', 'nagano'];
 
   const [visited, setVisited] = useState<Record<string, boolean>>(() => {
-    const saved = localStorage.getItem('japan_visited_records_v3');
+    const saved = localStorage.getItem('japan_visited_records_v4');
     if (saved) {
       try {
         return JSON.parse(saved);
@@ -182,7 +211,7 @@ export default function JapanMap({ onSelectPrefecture }: JapanMapProps) {
   });
 
   const [bucketList, setBucketList] = useState<Record<string, boolean>>(() => {
-    const saved = localStorage.getItem('japan_bucket_records');
+    const saved = localStorage.getItem('japan_bucket_records_v2');
     if (saved) {
       try {
         return JSON.parse(saved);
@@ -190,20 +219,24 @@ export default function JapanMap({ onSelectPrefecture }: JapanMapProps) {
         // Fall back
       }
     }
-    return {};
+    const initial: Record<string, boolean> = {};
+    MOCK_BUCKET.forEach((id) => {
+      initial[id] = true;
+    });
+    return initial;
   });
 
   useEffect(() => {
-    localStorage.setItem('japan_visited_records_v3', JSON.stringify(visited));
+    localStorage.setItem('japan_visited_records_v4', JSON.stringify(visited));
     window.dispatchEvent(new Event('japan_visited_updated'));
   }, [visited]);
 
   useEffect(() => {
-    localStorage.setItem('japan_bucket_records', JSON.stringify(bucketList));
+    localStorage.setItem('japan_bucket_records_v2', JSON.stringify(bucketList));
   }, [bucketList]);
 
   const [isShareOpen, setIsShareOpen] = useState(false);
-  const [showPrefNames, setShowPrefNames] = useState(true);
+  const [showPrefNames, setShowPrefNames] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [hoveredPref, setHoveredPref] = useState<PrefectureTravelData | null>(null);
   const [tooltipPos, setTooltipPos] = useState({ x: 0, y: 0 });
@@ -213,10 +246,26 @@ export default function JapanMap({ onSelectPrefecture }: JapanMapProps) {
   const longPressTimerRef = useRef<NodeJS.Timeout | null>(null);
   const isLongPressActiveRef = useRef(false);
 
+  // One-shot tap effect: traces the prefecture outline, then emits a ripple.
+  // `key` is refreshed on every tap so the animation re-plays even on the same prefecture.
+  const [tapFx, setTapFx] = useState<{ id: string; key: number } | null>(null);
+  const tapFxTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+  const triggerTapFx = (prefId: string) => {
+    if (tapFxTimerRef.current) {
+      clearTimeout(tapFxTimerRef.current);
+    }
+    setTapFx({ id: prefId, key: Date.now() });
+    tapFxTimerRef.current = setTimeout(() => setTapFx(null), 1800);
+  };
+
   useEffect(() => {
     return () => {
       if (longPressTimerRef.current) {
         clearTimeout(longPressTimerRef.current);
+      }
+      if (tapFxTimerRef.current) {
+        clearTimeout(tapFxTimerRef.current);
       }
     };
   }, []);
@@ -425,10 +474,17 @@ export default function JapanMap({ onSelectPrefecture }: JapanMapProps) {
       // It was a drag/pan action, don't trigger selection
       return;
     }
+    const willVisit = !visited[prefId];
     setVisited((prev) => ({
       ...prev,
       [prefId]: !prev[prefId],
     }));
+    // Play the outline-draw + ripple flourish only when newly marking as visited.
+    if (willVisit) {
+      triggerTapFx(prefId);
+    } else {
+      setTapFx(null);
+    }
     onSelectPrefecture(prefId);
   };
 
@@ -436,6 +492,14 @@ export default function JapanMap({ onSelectPrefecture }: JapanMapProps) {
 
   const visitedCount = Object.keys(visited).filter(id => visited[id]).length;
   const progressPercent = Math.round((visitedCount / 47) * 100);
+
+  // Count-up: smoothly tween the big headline number whenever the percentage changes.
+  const percentMotion = useMotionValue(progressPercent);
+  const displayedPercent = useTransform(percentMotion, (v) => Math.round(v));
+  useEffect(() => {
+    const controls = animate(percentMotion, progressPercent, { duration: 0.6, ease: 'easeOut' });
+    return () => controls.stop();
+  }, [progressPercent]);
 
   return (
     <div className="flex flex-col gap-2 w-full flex-grow overflow-visible h-full" id="japan-map-root">
@@ -449,7 +513,7 @@ export default function JapanMap({ onSelectPrefecture }: JapanMapProps) {
             id="master-of-japan-text-label"
           >
             <span className="text-[86px] font-black tracking-tighter text-[#4B4B4B] leading-[0.85] pointer-events-none text-center font-sans flex items-baseline justify-center">
-              {progressPercent}
+              <motion.span>{displayedPercent}</motion.span>
               <span className="text-[58px] font-black tracking-tighter ml-0.5">%</span>
             </span>
             <div className="w-full flex justify-between leading-none mt-4 pointer-events-none">
@@ -528,6 +592,13 @@ export default function JapanMap({ onSelectPrefecture }: JapanMapProps) {
                   }
                 }
 
+                const isAnimatingTap = tapFx?.id === pref.id;
+                // During the tap flourish, hold the fill gray while the outline traces,
+                // then fade the color in (フチ描き → 中に色がフェードイン).
+                const tapFillTransition = isAnimatingTap
+                  ? 'fill 0.35s ease-out 0.55s, stroke 0.35s ease-out 0.55s, stroke-width 0.35s ease-out 0.55s'
+                  : undefined;
+
                 // Interactive Mouse & Touch events for long-press trigger on path
                 const handleMouseDownPath = (e: React.MouseEvent) => {
                   if (e.button !== 0) return; // Left click only
@@ -548,6 +619,18 @@ export default function JapanMap({ onSelectPrefecture }: JapanMapProps) {
                   
                   return (
                     <g key={pref.id} id={`map-group-${pref.id}`}>
+                      {/* Generous invisible hit area so the small relocated Okinawa is easy to tap */}
+                      <path
+                        d="M343 798 L543 598 L860 598 L860 830 L343 830 Z"
+                        fill="transparent"
+                        style={{ pointerEvents: 'all' }}
+                        className="cursor-pointer"
+                        onClick={() => handlePrefectureClick(pref.id)}
+                        onMouseDown={handleMouseDownPath}
+                        onTouchStart={handleTouchStartPath}
+                        onMouseUp={handleMouseUpOrLeavePath}
+                        onTouchEnd={handleMouseUpOrLeavePath}
+                      />
                       {subPaths.map((subPath, idx) => {
                         let centerX = 575;
                         let centerY = 575;
@@ -581,7 +664,7 @@ export default function JapanMap({ onSelectPrefecture }: JapanMapProps) {
                             id={`map-path-${pref.id}-${idx}`}
                             d={subPath}
                             transform={transformStr}
-                            style={{ fill: fillVal, stroke: strokeVal, strokeWidth: `${strokeW}px` }}
+                            style={{ fill: fillVal, stroke: strokeVal, strokeWidth: `${(parseFloat(strokeW) / 3).toFixed(2)}px`, transition: tapFillTransition }}
                             className="transition-all duration-200 cursor-pointer stroke-linejoin-round"
                             onClick={() => handlePrefectureClick(pref.id)}
                             onMouseDown={handleMouseDownPath}
@@ -604,7 +687,7 @@ export default function JapanMap({ onSelectPrefecture }: JapanMapProps) {
                     key={pref.id}
                     id={`map-path-${pref.id}`}
                     d={path}
-                    style={{ fill: fillVal, stroke: strokeVal, strokeWidth: `${strokeW}px` }}
+                    style={{ fill: fillVal, stroke: strokeVal, strokeWidth: `${strokeW}px`, transition: tapFillTransition }}
                     className="transition-all duration-200 cursor-pointer stroke-linejoin-round"
                     onClick={() => handlePrefectureClick(pref.id)}
                     onMouseDown={handleMouseDownPath}
@@ -666,6 +749,57 @@ export default function JapanMap({ onSelectPrefecture }: JapanMapProps) {
                   })}
                 </g>
               )}
+
+              {/* Tap flourish: trace the prefecture outline, then emit a ripple (フチ描き→波紋) */}
+              {tapFx && (() => {
+                const fxPath = PREFECTURE_PATHS[tapFx.id];
+                if (!fxPath) return null;
+                const segments = getPrefSegments(tapFx.id, fxPath);
+                // Ripple geometry. A large prefecture (Hokkaido) hides a small same-color
+                // ripple inside its own green fill, so give it a centered origin, a larger
+                // radius, and a darker matcha stroke that stays visible over the green.
+                const isHokkaido = tapFx.id === 'hokkaido';
+                const rippleCenter = tapFx.id === 'okinawa'
+                  ? { x: 591, y: 580 }
+                  : isHokkaido
+                    ? { x: 664, y: 131 }
+                    : getPrefLabelPos(tapFx.id, fxPath);
+                const rippleEndRadius = isHokkaido ? 95 : 58;
+                const rippleStroke = isHokkaido ? '#4F7A1C' : '#8CC63F';
+                // Okinawa is drawn at scale(3); thin the traced-outline width so it matches
+                // the other prefectures instead of rendering 3× as thick.
+                const fxOutlineStrokeW = tapFx.id === 'okinawa' ? 1 : 3;
+
+                return (
+                  <g key={tapFx.key} className="pointer-events-none" id="tap-fx-layer">
+                    {segments.map((seg, i) => (
+                      <g key={i} transform={seg.transform}>
+                        <motion.path
+                          d={seg.d}
+                          fill="none"
+                          stroke="#74A732"
+                          strokeWidth={fxOutlineStrokeW}
+                          strokeLinejoin="round"
+                          strokeLinecap="round"
+                          initial={{ pathLength: 0, opacity: 0.95 }}
+                          animate={{ pathLength: 1, opacity: 1 }}
+                          transition={{ duration: 0.55, ease: 'easeInOut' }}
+                        />
+                      </g>
+                    ))}
+                    <motion.circle
+                      cx={rippleCenter.x}
+                      cy={rippleCenter.y}
+                      fill="none"
+                      stroke={rippleStroke}
+                      strokeWidth={4}
+                      initial={{ r: 4, opacity: 0 }}
+                      animate={{ r: rippleEndRadius, opacity: [0, 0.55, 0] }}
+                      transition={{ duration: 0.7, delay: 0.9, ease: 'easeOut' }}
+                    />
+                  </g>
+                );
+              })()}
             </svg>
 
             {/* Dynamic Floating Tooltip */}
@@ -690,15 +824,23 @@ export default function JapanMap({ onSelectPrefecture }: JapanMapProps) {
 
             {/* Minimalist Floating Navigation Controls & SHARE Button */}
             <div className="absolute bottom-6 right-6 z-30 flex flex-row items-end gap-3 pointer-events-auto" id="map-controls-group">
-              {/* Green SHARE Button directly to the left, styled matching the image */}
-              <button
-                onClick={() => setIsShareOpen(true)}
-                className="px-7 py-2.5 mb-[5px] bg-[#8CC63F] hover:bg-[#7dae36] active:scale-95 duration-150 transition-all rounded-full text-white font-[900] text-[15px] uppercase tracking-widest cursor-pointer flex items-center justify-center shadow-[0_6px_20px_rgba(140,198,63,0.45)] select-none whitespace-nowrap"
-                style={{ fontWeight: 900 }}
-                id="share-floating-pill-button"
-              >
-                SHARE
-              </button>
+              {/* Green SHARE Button + small "Powered by" credit beneath it */}
+              <div className="flex flex-col items-center gap-1 mb-[5px]">
+                <button
+                  onClick={() => setIsShareOpen(true)}
+                  className="px-7 py-2.5 bg-[#8CC63F] hover:bg-[#7dae36] active:scale-95 duration-150 transition-all rounded-full text-white font-[900] text-[15px] uppercase tracking-widest cursor-pointer flex items-center justify-center shadow-[0_6px_20px_rgba(140,198,63,0.45)] select-none whitespace-nowrap"
+                  style={{ fontWeight: 900 }}
+                  id="share-floating-pill-button"
+                >
+                  SHARE
+                </button>
+                <a
+                  href="https://esim.matcha-jp.com/"
+                  className="text-[9px] font-bold tracking-wide text-slate-400 hover:text-[#74A732] transition-colors whitespace-nowrap select-none"
+                >
+                  Powered by MATCHA eSIM
+                </a>
+              </div>
 
               {/* Vertical Navigation Controls Capsule */}
               <div className="flex flex-col rounded-[20px] bg-white shadow-[0_6px_20px_rgba(0,0,0,0.08)] border border-slate-100/80 p-1 items-center min-w-[48px]">

@@ -5,7 +5,6 @@
 
 import React, { useState, useEffect } from 'react';
 import Header from './components/Header';
-import BottomNav from './components/BottomNav';
 import MyJapanView from './components/MyJapanView';
 import { Tab } from './types';
 import { Wifi, Tag, Gift, User, Star, ArrowRight } from 'lucide-react';
@@ -13,8 +12,8 @@ import { Wifi, Tag, Gift, User, Star, ArrowRight } from 'lucide-react';
 export default function App() {
   const [currentTab, setCurrentTab] = useState<Tab>(Tab.MY_JAPAN);
   const [progressPercent, setProgressPercent] = useState<number>(() => {
-    const saved = localStorage.getItem('japan_visited_records_v3');
-    let visitedCount = 8; // MOCK_VISITED initial length
+    const saved = localStorage.getItem('japan_visited_records_v4');
+    let visitedCount = 9; // MOCK_VISITED initial length
     if (saved) {
       try {
         const parsed = JSON.parse(saved);
@@ -28,8 +27,8 @@ export default function App() {
 
   useEffect(() => {
     const handleUpdate = () => {
-      const saved = localStorage.getItem('japan_visited_records_v3');
-      let visitedCount = 8;
+      const saved = localStorage.getItem('japan_visited_records_v4');
+      let visitedCount = 9;
       if (saved) {
         try {
           const parsed = JSON.parse(saved);
@@ -135,7 +134,7 @@ export default function App() {
     <div className="min-h-screen bg-[#F8FAF9] flex flex-col">
       {/* Maximum viewport wrapper designed to mirror an elegant mobile app frame on large desktops */}
       <div className={`w-full max-w-lg mx-auto bg-white shadow-xl flex flex-col relative border-x border-[#EAEAEA] overflow-hidden ${
-        currentTab === Tab.MY_JAPAN ? 'h-screen pb-[72px]' : 'min-h-screen pb-24'
+        currentTab === Tab.MY_JAPAN ? 'h-screen' : 'min-h-screen'
       }`}>
         
         {/* Dynamic Overlapping Circles Illustration (Background underlayer, top-left position, 1.2x size, 50% opacity, placed directly on the main background) */}
@@ -183,9 +182,6 @@ export default function App() {
         }`}>
           {renderActiveView()}
         </main>
-        
-        {/* Fixed Floating Bottom Navigation bar items */}
-        <BottomNav currentTab={currentTab} setCurrentTab={setCurrentTab} />
         
       </div>
     </div>
