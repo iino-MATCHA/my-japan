@@ -501,6 +501,15 @@ export default function JapanMap({ onSelectPrefecture }: JapanMapProps) {
     return () => controls.stop();
   }, [progressPercent]);
 
+  // Auto-open the share sheet the moment progress first crosses above 20%.
+  const prevPercentRef = useRef(progressPercent);
+  useEffect(() => {
+    if (prevPercentRef.current <= 20 && progressPercent > 20) {
+      setIsShareOpen(true);
+    }
+    prevPercentRef.current = progressPercent;
+  }, [progressPercent]);
+
   return (
     <div className="flex flex-col gap-2 w-full flex-grow overflow-visible h-full" id="japan-map-root">
       <div 
@@ -760,7 +769,7 @@ export default function JapanMap({ onSelectPrefecture }: JapanMapProps) {
                 // radius, and a darker matcha stroke that stays visible over the green.
                 const isHokkaido = tapFx.id === 'hokkaido';
                 const rippleCenter = tapFx.id === 'okinawa'
-                  ? { x: 591, y: 580 }
+                  ? { x: 564, y: 655 }
                   : isHokkaido
                     ? { x: 664, y: 131 }
                     : getPrefLabelPos(tapFx.id, fxPath);
@@ -823,26 +832,8 @@ export default function JapanMap({ onSelectPrefecture }: JapanMapProps) {
             )}
 
             {/* Minimalist Floating Navigation Controls & SHARE Button */}
-            <div className="absolute bottom-6 right-6 z-30 flex flex-row items-end gap-3 pointer-events-auto" id="map-controls-group">
-              {/* Green SHARE Button + small "Powered by" credit beneath it */}
-              <div className="flex flex-col items-center gap-1 mb-[5px]">
-                <button
-                  onClick={() => setIsShareOpen(true)}
-                  className="px-7 py-2.5 bg-[#8CC63F] hover:bg-[#7dae36] active:scale-95 duration-150 transition-all rounded-full text-white font-[900] text-[15px] uppercase tracking-widest cursor-pointer flex items-center justify-center shadow-[0_6px_20px_rgba(140,198,63,0.45)] select-none whitespace-nowrap"
-                  style={{ fontWeight: 900 }}
-                  id="share-floating-pill-button"
-                >
-                  SHARE
-                </button>
-                <a
-                  href="https://esim.matcha-jp.com/"
-                  className="text-[9px] font-bold tracking-wide text-slate-400 hover:text-[#74A732] transition-colors whitespace-nowrap select-none"
-                >
-                  Powered by MATCHA eSIM
-                </a>
-              </div>
-
-              {/* Vertical Navigation Controls Capsule */}
+            <div className="absolute bottom-6 right-6 z-30 flex flex-col items-end gap-3 pointer-events-auto" id="map-controls-group">
+              {/* Vertical Navigation Controls Capsule (zoom only) */}
               <div className="flex flex-col rounded-[20px] bg-white shadow-[0_6px_20px_rgba(0,0,0,0.08)] border border-slate-100/80 p-1 items-center min-w-[48px]">
                 <button
                   onClick={zoomIn}
@@ -859,14 +850,24 @@ export default function JapanMap({ onSelectPrefecture }: JapanMapProps) {
                 >
                   －
                 </button>
-                <div className="w-7 h-[1px] bg-slate-100" />
+              </div>
+
+              {/* Green SHARE Button + small "Powered by" credit beneath it, pinned right */}
+              <div className="flex flex-col items-end gap-1">
                 <button
-                  onClick={resetView}
-                  className="w-11 h-10 rounded-xl flex items-center justify-center text-[11px] font-[900] text-gray-500 hover:text-[#112A2E] hover:bg-slate-50 active:scale-90 transition-all cursor-pointer"
-                  title="Reset View (リセット)"
+                  onClick={() => setIsShareOpen(true)}
+                  className="px-7 py-2.5 bg-[#8CC63F] hover:bg-[#7dae36] active:scale-95 duration-150 transition-all rounded-full text-white font-[900] text-[15px] uppercase tracking-widest cursor-pointer flex items-center justify-center shadow-[0_6px_20px_rgba(140,198,63,0.45)] select-none whitespace-nowrap"
+                  style={{ fontWeight: 900 }}
+                  id="share-floating-pill-button"
                 >
-                  Reset
+                  SHARE
                 </button>
+                <a
+                  href="https://esim.matcha-jp.com/"
+                  className="text-[9px] font-bold tracking-wide text-slate-400 hover:text-[#74A732] transition-colors whitespace-nowrap select-none"
+                >
+                  Powered by MATCHA eSIM
+                </a>
               </div>
             </div>
           </div>
