@@ -242,6 +242,9 @@ export default function JapanMap({ onSelectPrefecture }: JapanMapProps) {
   const [tooltipPos, setTooltipPos] = useState({ x: 0, y: 0 });
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const shareCardRef = useRef<HTMLDivElement>(null);
+  // Image pre-generated when the share sheet opens, so navigator.share() can run
+  // immediately inside the user gesture (Chrome requires transient activation).
+  const cardBlobRef = useRef<Blob | null>(null);
 
   const longPressTimerRef = useRef<NodeJS.Timeout | null>(null);
   const isLongPressActiveRef = useRef(false);
@@ -353,60 +356,64 @@ export default function JapanMap({ onSelectPrefecture }: JapanMapProps) {
     throw lastError ?? new Error('Image generation failed');
   };
 
+  const triggerDownload = (blob: Blob) => {
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'matcha_my_japan_status.png';
+    link.rel = 'noopener';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+  };
+
   const handleActionClick = async (actionType: 'instagram' | 'facebook' | 'x' | 'download' | 'other') => {
-    if (!shareCardRef.current) {
+    if (!shareCardRef.current && !cardBlobRef.current) {
       setToastMessage("Error: Card element not found!");
       return;
     }
 
     try {
-      setToastMessage("Generating premium status card... ⏳");
+      // Prefer the image pre-generated when the sheet opened, so navigator.share() can
+      // run immediately inside the user gesture (Chrome refuses it otherwise).
+      let blob = cardBlobRef.current;
+      if (!blob) {
+        setToastMessage("Generating status card... ⏳");
+        blob = await generateShareBlob();
+      }
 
-      const blob = await generateShareBlob();
+      const file = new File([blob], 'matcha_my_japan_status.png', { type: 'image/png' });
+      const canShareFiles =
+        !!navigator.share &&
+        typeof navigator.canShare === 'function' &&
+        navigator.canShare({ files: [file] });
 
-      const file = new File([blob], 'master_of_japan_status.png', { type: 'image/png' });
-
-      if (actionType !== 'download') {
-        // Standard Web Share API check for file capability
-        if (navigator.share && navigator.canShare && navigator.canShare({ files: [file] })) {
-          setToastMessage("Opening native share... 📸");
+      if (actionType !== 'download' && canShareFiles) {
+        try {
           await navigator.share({
             files: [file],
             title: 'Visited Japan Status',
             text: `I have visited ${progressPercent}% of Japan! Check out my status.`,
           });
-          setToastMessage("Share sheet opened successfully!");
+          setToastMessage("Shared successfully! 📸");
           setTimeout(() => setToastMessage(null), 2500);
-        } else {
-          // Fallback if the browser doesn't support file sharing via Web Share API
-          setToastMessage("Saving image to device... 📲");
-          const url = URL.createObjectURL(blob);
-          const link = document.createElement('a');
-          link.href = url;
-          link.download = 'master_of_japan_status.png';
-          document.body.appendChild(link);
-          link.click();
-          document.body.removeChild(link);
-          URL.revokeObjectURL(url);
-          
-          setTimeout(() => {
-            setToastMessage("Saved to download folder! You can post it to Instagram 📸");
+        } catch (shareErr: any) {
+          if (shareErr && shareErr.name === 'AbortError') {
+            // User dismissed the native share sheet — not an error.
+            setToastMessage(null);
+          } else {
+            // Native share refused (e.g. Chrome lost the user gesture): save instead.
+            triggerDownload(blob);
+            setToastMessage("Saved to your device! You can post it to Instagram 📸");
             setTimeout(() => setToastMessage(null), 4000);
-          }, 1500);
+          }
         }
-      } else if (actionType === 'download') {
-        // Direct download flow
-        const url = URL.createObjectURL(blob);
-        const link = document.createElement('a');
-        link.href = url;
-        link.download = 'master_of_japan_status.png';
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-        URL.revokeObjectURL(url);
-
-        setToastMessage("Image saved successfully to your gallery! 📸");
-        setTimeout(() => setToastMessage(null), 3000);
+      } else {
+        // No file-sharing support, or an explicit download: save the image.
+        triggerDownload(blob);
+        setToastMessage("Saved to your device! You can post it to Instagram 📸");
+        setTimeout(() => setToastMessage(null), 4000);
       }
     } catch (error) {
       console.error("Failed to generate/share image:", error);
@@ -551,6 +558,25 @@ export default function JapanMap({ onSelectPrefecture }: JapanMapProps) {
     }
     prevPercentRef.current = progressPercent;
   }, [progressPercent]);
+
+  // Pre-render the share image while the sheet is open so the Web Share API can be
+  // invoked instantly within the tap (avoids Chrome's "lost user activation" failure).
+  useEffect(() => {
+    if (!isShareOpen) {
+      cardBlobRef.current = null;
+      return;
+    }
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      generateShareBlob()
+        .then((blob) => { if (!cancelled) cardBlobRef.current = blob; })
+        .catch(() => { /* handler will generate on demand if this fails */ });
+    }, 400);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [isShareOpen, progressPercent]);
 
   return (
     <div className="flex flex-col gap-2 w-full flex-grow overflow-visible h-full" id="japan-map-root">
