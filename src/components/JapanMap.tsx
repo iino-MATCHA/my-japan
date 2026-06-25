@@ -281,6 +281,15 @@ export default function JapanMap({ onSelectPrefecture }: JapanMapProps) {
   const panStartRef = useRef({ x: 0, y: 0 });
   const clickStartCoord = useRef({ x: 0, y: 0 });
   const draggedAmountRef = useRef(0);
+  const pinchStartDistRef = useRef(0);
+  const pinchStartScaleRef = useRef(1);
+
+  // Pan rubber-banding: track the finger 1:1 up to a soft limit, then strongly resist
+  // further travel so the map feels weighted and never slides completely off-screen.
+  const SOFT_PAN_LIMIT = 170;
+  const clampScale = (s: number) => Math.min(Math.max(s, 0.5), 4);
+  const rubberband = (value: number, limit: number) =>
+    Math.abs(value) <= limit ? value : Math.sign(value) * (limit + (Math.abs(value) - limit) * 0.22);
 
   // Reliably rasterize the share card to a PNG Blob. html-to-image can fail on the
   // first pass (common on Safari) or when embedding cross-origin web fonts, and can
@@ -440,16 +449,19 @@ export default function JapanMap({ onSelectPrefecture }: JapanMapProps) {
     const deltaY = e.clientY - clickStartCoord.current.y;
     draggedAmountRef.current = Math.sqrt(deltaX * deltaX + deltaY * deltaY);
 
-    // Apply 0.20 resistance multiplier so dragging feels heavy, stable and precise (less slippery)
-    const resistance = 0.20;
+    const limit = SOFT_PAN_LIMIT * scale;
     setPan({
-      x: panStartRef.current.x + deltaX * resistance,
-      y: panStartRef.current.y + deltaY * resistance
+      x: rubberband(panStartRef.current.x + deltaX, limit),
+      y: rubberband(panStartRef.current.y + deltaY, limit),
     });
   };
 
   const handleMouseUpOrLeave = () => {
     setIsDragging(false);
+  };
+
+  const handleWheel = (e: React.WheelEvent) => {
+    setScale((prev) => clampScale(prev - e.deltaY * 0.0015));
   };
 
   const handleTouchStart = (e: React.TouchEvent) => {
@@ -459,28 +471,48 @@ export default function JapanMap({ onSelectPrefecture }: JapanMapProps) {
       clickStartCoord.current = { x: touch.clientX, y: touch.clientY };
       panStartRef.current = { ...pan };
       draggedAmountRef.current = 0;
+    } else if (e.touches.length === 2) {
+      // Pinch to zoom.
+      setIsDragging(true);
+      const [a, b] = [e.touches[0], e.touches[1]];
+      pinchStartDistRef.current = Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+      pinchStartScaleRef.current = scale;
+      draggedAmountRef.current = 999; // ensure a pinch never counts as a tap
     }
   };
 
   const handleTouchMove = (e: React.TouchEvent) => {
+    if (e.touches.length === 2 && pinchStartDistRef.current > 0) {
+      const [a, b] = [e.touches[0], e.touches[1]];
+      const dist = Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+      setScale(clampScale(pinchStartScaleRef.current * (dist / pinchStartDistRef.current)));
+      return;
+    }
     if (!isDragging) return;
     if (e.touches.length === 1) {
       const touch = e.touches[0];
       const deltaX = touch.clientX - clickStartCoord.current.x;
       const deltaY = touch.clientY - clickStartCoord.current.y;
       draggedAmountRef.current = Math.sqrt(deltaX * deltaX + deltaY * deltaY);
-
-      // Apply 0.20 resistance multiplier so touch-drag/panning feels heavy, stable, and less slippery
-      const resistance = 0.20;
+      const limit = SOFT_PAN_LIMIT * scale;
       setPan({
-        x: panStartRef.current.x + deltaX * resistance,
-        y: panStartRef.current.y + deltaY * resistance
+        x: rubberband(panStartRef.current.x + deltaX, limit),
+        y: rubberband(panStartRef.current.y + deltaY, limit),
       });
     }
   };
 
-  const handleTouchEnd = () => {
-    setIsDragging(false);
+  const handleTouchEnd = (e: React.TouchEvent) => {
+    if (e.touches.length === 0) {
+      setIsDragging(false);
+      pinchStartDistRef.current = 0;
+    } else if (e.touches.length === 1) {
+      // Lifting one finger after a pinch: re-anchor panning to the remaining finger.
+      pinchStartDistRef.current = 0;
+      clickStartCoord.current = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+      panStartRef.current = { ...pan };
+      draggedAmountRef.current = 999;
+    }
   };
 
   // Single tap toggles "visited" (with the outline+ripple flourish); a quick second
@@ -619,18 +651,27 @@ export default function JapanMap({ onSelectPrefecture }: JapanMapProps) {
           </div>
 
           {/* SVG map wrap with locked/fixed position */}
-          <div 
+          <div
             ref={mapContainerRef}
+            onMouseDown={handleMouseDown}
             onMouseMove={handleMouseMoveMap}
-            className="relative w-full flex-grow h-0 min-h-[460px] bg-transparent overflow-hidden flex items-center justify-center cursor-default group select-none z-10"
+            onMouseUp={handleMouseUpOrLeave}
+            onMouseLeave={handleMouseUpOrLeave}
+            onWheel={handleWheel}
+            onTouchStart={handleTouchStart}
+            onTouchMove={handleTouchMove}
+            onTouchEnd={handleTouchEnd}
+            className={`relative w-full flex-grow h-0 min-h-[460px] bg-transparent overflow-hidden flex items-center justify-center group select-none z-10 touch-none ${isDragging ? 'cursor-grabbing' : 'cursor-grab'}`}
           >
 
-            <svg 
-              viewBox="0 0 860 830" 
-              className="w-full h-full p-2 select-none z-10 transition-transform duration-75 ease-out"
-              style={{ 
+            <svg
+              viewBox="0 0 860 830"
+              className="w-full h-full p-2 select-none z-10"
+              style={{
                 transform: `translate(${pan.x}px, ${pan.y}px) scale(${scale})`,
-                transformOrigin: 'center center'
+                transformOrigin: 'center center',
+                transition: isDragging ? 'none' : 'transform 0.2s ease-out',
+                willChange: 'transform',
               }}
               xmlns="http://www.w3.org/2000/svg"
             >
@@ -1136,6 +1177,19 @@ export default function JapanMap({ onSelectPrefecture }: JapanMapProps) {
                       </div>
                       <span className="text-[10px] font-bold text-gray-400 group-hover:text-[#112A2E] transition-colors animate-none">
                         Instagram
+                      </span>
+                    </button>
+
+                    {/* Save / Download button */}
+                    <button
+                      onClick={() => handleActionClick('download')}
+                      className="flex flex-col items-center gap-1.5 group cursor-pointer focus:outline-hidden"
+                    >
+                      <div className="w-11 h-11 rounded-full bg-[#8CC63F] text-white flex items-center justify-center shadow-md group-hover:scale-105 active:scale-95 transition-all">
+                        <Download className="w-4.5 h-4.5 stroke-[2.2]" />
+                      </div>
+                      <span className="text-[10px] font-bold text-gray-400 group-hover:text-[#112A2E] transition-colors animate-none">
+                        Save
                       </span>
                     </button>
                   </div>
