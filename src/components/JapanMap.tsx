@@ -236,6 +236,7 @@ export default function JapanMap({ onSelectPrefecture }: JapanMapProps) {
   }, [bucketList]);
 
   const [isShareOpen, setIsShareOpen] = useState(false);
+  const [showHint, setShowHint] = useState(false);
   const [showPrefNames, setShowPrefNames] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [hoveredPref, setHoveredPref] = useState<PrefectureTravelData | null>(null);
@@ -379,7 +380,7 @@ export default function JapanMap({ onSelectPrefecture }: JapanMapProps) {
         typeof navigator.canShare === 'function' &&
         navigator.canShare({ files: [file] });
 
-      if (actionType !== 'download' && canShareFiles) {
+      if (canShareFiles) {
         try {
           await navigator.share({
             files: [file],
@@ -764,7 +765,7 @@ export default function JapanMap({ onSelectPrefecture }: JapanMapProps) {
                             d={subPath}
                             transform={transformStr}
                             style={{ fill: fillVal, stroke: strokeVal, strokeWidth: `${(parseFloat(strokeW) / 3).toFixed(2)}px`, transition: tapFillTransition }}
-                            className="transition-all duration-200 cursor-pointer stroke-linejoin-round"
+                            className="cursor-pointer stroke-linejoin-round"
                             onClick={() => handlePrefectureClick(pref.id)}
                             onMouseLeave={() => setHoveredPref(null)}
                           />
@@ -957,6 +958,35 @@ export default function JapanMap({ onSelectPrefecture }: JapanMapProps) {
             <div className="flex items-center gap-1.5" id="legend-bucket">
               <span className="w-2.5 h-2.5 rounded-full bg-[#BDE652] inline-block shadow-3xs" />
               <span className="text-gray-500">bucket list</span>
+              <div className="relative flex items-center">
+                <button
+                  onClick={() => setShowHint(v => !v)}
+                  className="w-[14px] h-[14px] rounded-full border border-gray-400 text-gray-400 flex items-center justify-center leading-none select-none active:opacity-60"
+                  style={{ fontSize: '9px', fontStyle: 'italic', fontFamily: 'serif' }}
+                  aria-label="How to use"
+                >
+                  i
+                </button>
+                {showHint && (
+                  <>
+                    <div
+                      className="absolute z-50 bottom-full left-1/2 mb-2 bg-[#112A2E] text-white rounded-lg px-3 py-2 text-[10px] leading-relaxed whitespace-nowrap shadow-lg text-left"
+                      style={{ transform: 'translateX(-50%)' }}
+                    >
+                      <div className="font-bold mb-0.5">How to tap</div>
+                      <div>→ one tap: <span className="text-[#8CC63F]">visited</span></div>
+                      <div>→ double tap: <span className="text-[#BDE652]">bucket list</span></div>
+                      {/* Arrow */}
+                      <div
+                        className="absolute left-1/2 top-full"
+                        style={{ transform: 'translateX(-50%)', width: 0, height: 0, borderLeft: '5px solid transparent', borderRight: '5px solid transparent', borderTop: '5px solid #112A2E' }}
+                      />
+                    </div>
+                    {/* Dismiss overlay */}
+                    <div className="fixed inset-0 z-40" onClick={() => setShowHint(false)} />
+                  </>
+                )}
+              </div>
             </div>
           </div>
         </div>
